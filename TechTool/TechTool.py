@@ -1606,7 +1606,7 @@ class AppDetailsFrame(ttk.Frame):
         self.denied_status_var.set("")
         self.denied_delete_files_var.set(True)
 
-        ttk.Label(self.action_content_frame, text="Denying this package will stop it from moving through the workflow.", wraplength=400, foreground="#B00020").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(self.action_content_frame, text="Denying this package will stop it from moving through the workflow.\nTo deny a full package family, use the Approval App.", wraplength=400, foreground="#B00020").grid(row=0, column=0, sticky="w", pady=(0, 8))
         ttk.Label(self.action_content_frame, text="Reason for denial:").grid(row=1, column=0, sticky="w")
 
         reason_entry = ttk.Entry(self.action_content_frame, textvariable=self.denied_reason_var)
