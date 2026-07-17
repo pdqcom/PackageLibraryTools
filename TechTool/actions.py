@@ -1,4 +1,6 @@
+import csv
 import getpass
+import html
 import os
 import re
 import shutil
@@ -262,6 +264,233 @@ def replace_icon(app_path, report_folder, current_user=None):
 
     return True
 
+def get_ready_pub_defaults(app_path, version_folder, fallback_version):
+    inventory_variable = ""
+    inventory_version = fallback_version or ""
+    xml_path = ""
+
+    if app_path and os.path.isdir(app_path):
+        variable_files = [
+            entry
+            for entry in os.scandir(app_path)
+            if entry.is_file()
+            and entry.name.lower().startswith("appver")
+            and entry.name.lower().endswith(".variable")
+        ]
+
+        variable_files.sort(key=lambda entry: entry.name.lower())
+
+        if variable_files:
+            inventory_variable = os.path.splitext(variable_files[0].name)[0]
+
+    if version_folder and os.path.isdir(version_folder):
+        qa_report_path = next(
+            (
+                entry.path
+                for entry in os.scandir(version_folder)
+                if entry.is_file() and entry.name.lower() == "qa.report"
+            ),
+            ""
+        )
+
+        scanned_version = get_inventory_version_from_qa_report(qa_report_path)
+        if scanned_version: inventory_version = scanned_version
+
+        xml_files = [entry for entry in os.scandir(version_folder) if entry.is_file() and entry.name.lower().endswith(".xml")]
+        xml_files.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
+
+        if xml_files: xml_path = xml_files[0].path
+
+    return inventory_variable, inventory_version, xml_path
+
+
+def get_inventory_version_from_qa_report(qa_report_path):
+    if not qa_report_path or not os.path.isfile(qa_report_path):
+        return ""
+
+    expected_header = "ComputerName,Name,Version,InstallDate,RegistryHive"
+
+    try:
+        with open(qa_report_path, "r", encoding="utf-8", errors="replace") as file:
+            lines = file.read().splitlines()
+
+        for index, line in enumerate(lines):
+            if line.strip() != expected_header:
+                continue
+
+            data_line = next((candidate for candidate in lines[index + 1:] if candidate.strip()), "")
+            if not data_line: return ""
+
+            rows = list(csv.DictReader([expected_header, data_line]))
+            if not rows: return ""
+
+            return (rows[0].get("Version") or "").strip()
+
+    except Exception:
+        return ""
+
+    return ""
+
+
+def prepare_ready_pub(app_path, status_file, repo_path, app_name, inventory_variable, inventory_version, xml_path, version_folder, current_user=None):
+    if not app_path or not os.path.isdir(app_path):
+        messagebox.showwarning("Missing Package Folder", "No package folder was found.")
+        return False
+
+    if not status_file or not os.path.isfile(status_file):
+        messagebox.showwarning("Missing Status File", "No existing status file was found.")
+        return False
+
+    if not repo_path or not os.path.isdir(repo_path):
+        messagebox.showwarning("Missing Repository", f"The selected repository does not exist:\n{repo_path}")
+        return False
+
+    if not version_folder or not os.path.isdir(version_folder):
+        messagebox.showwarning("Missing Version Folder", "No version folder was found.")
+        return False
+
+    app_name = (app_name or "").strip()
+    inventory_variable = (inventory_variable or "").strip()
+    inventory_version = (inventory_version or "").strip()
+    xml_path = (xml_path or "").strip().strip('"')
+    current_user = current_user or getpass.getuser()
+
+    missing_fields = []
+
+    if not app_name: missing_fields.append("App Name")
+    if not inventory_variable: missing_fields.append("Inventory Variable")
+    if not inventory_version: missing_fields.append("Inventory Version")
+    if not xml_path: missing_fields.append("XML Path")
+
+    if missing_fields:
+        messagebox.showwarning("Missing Information", "Complete the following fields:\n\n" + "\n".join(missing_fields))
+        return False
+
+    if not os.path.isfile(xml_path):
+        messagebox.showwarning("XML Not Found", f"The selected XML file does not exist:\n{xml_path}")
+        return False
+
+    new_status_file = os.path.join(app_path, "READY_Pub.status")
+
+    if os.path.normcase(os.path.abspath(status_file)) == os.path.normcase(os.path.abspath(new_status_file)):
+        messagebox.showwarning("Already READY_Pub", "This package is already set to READY_Pub.")
+        return False
+
+    if os.path.exists(new_status_file):
+        messagebox.showwarning("Status File Exists", f"That status file already exists:\n{new_status_file}")
+        return False
+
+    upload_folder = os.path.join(repo_path, "Upload")
+    is_new_package = os.path.isfile(os.path.join(app_path, "new.package"))
+
+    if is_new_package: upload_folder = os.path.join(upload_folder, "OnHold_NOT_PUBED")
+
+    if not os.path.isdir(upload_folder):
+        messagebox.showwarning("Upload Folder Not Found", f"The upload folder does not exist:\n{upload_folder}")
+        return False
+
+    clean_app_name = re.sub(r"\s+", "", app_name)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    upload_filename = f"{clean_app_name}_{timestamp}_Firehose_Upload.txt"
+    upload_path = os.path.join(upload_folder, upload_filename)
+    review_path = os.path.join(version_folder, "PackageReview.html")
+    review_created = False
+    upload_created = False
+    replaced_upload_files = {}
+
+    upload_file_contents = [
+        ["PackageName", "InventoryVariable", "InventoryVersion", "PackageXMLPath"],
+        [app_name, inventory_variable, inventory_version, xml_path],
+    ]
+
+    try:
+        temporary_upload = tempfile.NamedTemporaryFile(prefix="TechToolReadyPub_", suffix=".txt", dir=upload_folder, delete=False)
+        temporary_upload_path = temporary_upload.name
+        temporary_upload.close()
+
+        try:
+            with open(temporary_upload_path, "w", newline="", encoding="utf-8") as file:
+                writer = csv.writer(file, lineterminator="\n")
+                writer.writerows(upload_file_contents)
+
+            if not os.path.isfile(temporary_upload_path) or os.path.getsize(temporary_upload_path) <= 0:
+                raise Exception("The upload file could not be generated.")
+
+            if is_new_package:
+                upload_pattern = re.compile(rf"^{re.escape(clean_app_name)}_\d{{14}}_Firehose_Upload\.txt$", re.IGNORECASE)
+
+                for entry in os.scandir(upload_folder):
+                    if not entry.is_file() or not upload_pattern.fullmatch(entry.name):
+                        continue
+
+                    with open(entry.path, "rb") as file:
+                        replaced_upload_files[entry.path] = file.read()
+
+                    os.remove(entry.path)
+
+            os.replace(temporary_upload_path, upload_path)
+            upload_created = True
+
+        finally:
+            if os.path.isfile(temporary_upload_path):
+                os.remove(temporary_upload_path)
+
+        if not os.path.isfile(upload_path):
+            raise Exception(f"The upload file was not found after creation:\n{upload_path}")
+
+        if not os.path.isfile(review_path):
+            runtime = datetime.now(timezone.utc).strftime("%#m/%#d/%Y %#I:%M:%S %p UTC")
+
+            review_contents = f"""<!DOCTYPE html>
+<html>
+<body>
+<p>Technician changed status to READY_Pub before a HTML Review page was generated.</p>
+<p>Technician: {html.escape(current_user)}<br>RunTime: {html.escape(runtime)}</p><hr>
+<p>Audit Report:<br><iframe src="audit.report" width="100%" height="500px" frameborder="1"></iframe></p><hr>
+<p>QA Report:<br><iframe src="qa.report" width="100%" height="500px" frameborder="1"></iframe></p>
+</body>
+</html>
+"""
+
+            with open(review_path, "w", encoding="utf-8", errors="replace") as file:
+                file.write(review_contents)
+
+            review_created = True
+
+        if not os.path.isfile(review_path):
+            raise Exception(f"The HTML review file was not found after creation:\n{review_path}")
+
+        append_tech_tool_audit_log(
+            report_folder=version_folder,
+            action=f"PrepareReadyPub: InventoryVariable={inventory_variable}; InventoryVersion={inventory_version}",
+            target_path=upload_path,
+            current_user=current_user
+        )
+
+        os.rename(status_file, new_status_file)
+        return True
+
+    except Exception:
+        if upload_created and os.path.isfile(upload_path):
+            try:
+                os.remove(upload_path)
+            except Exception:
+                pass
+
+        for previous_path, previous_contents in replaced_upload_files.items():
+            try:
+                with open(previous_path, "wb") as file:
+                    file.write(previous_contents)
+            except Exception:
+                pass
+
+        if review_created and os.path.isfile(review_path):
+            try:
+                os.remove(review_path)
+            except Exception:
+                pass
+
+        raise
 
 def change_status(app_path, status_file, new_status, report_folder, current_user=None):
     if not status_file or not os.path.isfile(status_file):

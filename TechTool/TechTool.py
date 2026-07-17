@@ -897,6 +897,11 @@ class AppDetailsFrame(ttk.Frame):
         self.installer_status_var = tk.StringVar()
         self.installer_source_var = tk.StringVar(value="URL")
         self.local_installer_var = tk.StringVar()
+        self.ready_pub_app_name_var = tk.StringVar()
+        self.ready_pub_inventory_variable_var = tk.StringVar()
+        self.ready_pub_inventory_version_var = tk.StringVar()
+        self.ready_pub_xml_path_var = tk.StringVar()
+        self.ready_pub_status_var = tk.StringVar()
         self.link_font = font.nametofont("TkDefaultFont").copy()
         self.link_hover_font = self.link_font.copy()
         self.link_hover_font.configure(underline=True)
@@ -1375,6 +1380,17 @@ class AppDetailsFrame(ttk.Frame):
         menu.tk_popup(x, y)
 
     def change_status(self, new_status):
+        if new_status == "READY_Pub":
+            self.selected_action_var.set("Before that Status Change...")
+            self.render_ready_pub_status_action()
+            return
+
+        if new_status in ("HOLD", "DENIED"):
+            self.selected_action_var.set("Before that Status Change...")
+            self.clear_action_content()
+            ttk.Label(self.action_content_frame, text=f"The {new_status} helper will be added next.", foreground="#666666").grid(row=0, column=0, sticky="w")
+            return
+
         try:
             changed = actions.change_status(
                 app_path=self.app_path,
@@ -1389,6 +1405,92 @@ class AppDetailsFrame(ttk.Frame):
 
         except Exception as error:
             messagebox.showerror("Status Change Failed", str(error))
+
+    def render_ready_pub_status_action(self):
+        self.clear_action_content()
+        self.action_content_frame.columnconfigure(0, weight=0)
+        self.action_content_frame.columnconfigure(1, weight=1)
+
+        inventory_variable, inventory_version, xml_path = actions.get_ready_pub_defaults(
+            app_path=self.app_path,
+            version_folder=self.get_report_folder(),
+            fallback_version=self.version
+        )
+
+        self.ready_pub_app_name_var.set(self.app_name)
+        self.ready_pub_inventory_variable_var.set(inventory_variable)
+        self.ready_pub_inventory_version_var.set(inventory_version)
+        self.ready_pub_xml_path_var.set(xml_path)
+        self.ready_pub_status_var.set("")
+
+        ttk.Label(self.action_content_frame, text="App Name:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        app_name_entry = ttk.Entry(self.action_content_frame, textvariable=self.ready_pub_app_name_var)
+        app_name_entry.grid(row=0, column=1, sticky="ew", pady=3)
+
+        ttk.Label(self.action_content_frame, text="Inventory Variable:").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        inventory_variable_entry = ttk.Entry(self.action_content_frame, textvariable=self.ready_pub_inventory_variable_var)
+        inventory_variable_entry.grid(row=1, column=1, sticky="ew", pady=3)
+
+        ttk.Label(self.action_content_frame, text="Inventory Version:").grid(row=2, column=0, sticky="w", padx=(0, 8))
+        inventory_version_entry = ttk.Entry(self.action_content_frame, textvariable=self.ready_pub_inventory_version_var)
+        inventory_version_entry.grid(row=2, column=1, sticky="ew", pady=3)
+
+        ttk.Label(self.action_content_frame, text="XML Path:").grid(row=3, column=0, sticky="w", padx=(0, 8))
+        xml_path_entry = ttk.Entry(self.action_content_frame, textvariable=self.ready_pub_xml_path_var)
+        xml_path_entry.grid(row=3, column=1, sticky="ew", pady=3)
+
+        button_frame = ttk.Frame(self.action_content_frame)
+        button_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        button_frame.columnconfigure(0, weight=1)
+        button_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(button_frame, textvariable=self.ready_pub_status_var, foreground="green").grid(row=0, column=0, sticky="w")
+
+        self.ready_pub_button = ttk.Button(button_frame, text="Generate Files and Update Status", command=self.prepare_ready_pub)
+        self.ready_pub_button.grid(row=0, column=1, sticky="e")
+
+        app_name_entry.bind("<KeyRelease>", lambda event: self.ready_pub_status_var.set(""))
+        inventory_variable_entry.bind("<KeyRelease>", lambda event: self.ready_pub_status_var.set(""))
+        inventory_version_entry.bind("<KeyRelease>", lambda event: self.ready_pub_status_var.set(""))
+        xml_path_entry.bind("<KeyRelease>", lambda event: self.ready_pub_status_var.set(""))
+
+        app_name_entry.focus_set()
+
+        self.update_idletasks()
+        xml_path_entry.xview_moveto(1)
+
+
+    def prepare_ready_pub(self):
+        self.ready_pub_status_var.set("Generating files...")
+        self.ready_pub_button.configure(state="disabled")
+        self.update_idletasks()
+
+        try:
+            changed = actions.prepare_ready_pub(
+                app_path=self.app_path,
+                status_file=self.status_file,
+                repo_path=self.controller.viewer_frame.repo_path.get(),
+                app_name=self.ready_pub_app_name_var.get(),
+                inventory_variable=self.ready_pub_inventory_variable_var.get(),
+                inventory_version=self.ready_pub_inventory_version_var.get(),
+                xml_path=self.ready_pub_xml_path_var.get(),
+                version_folder=self.get_report_folder(),
+                current_user=getattr(self.controller, "current_user", getpass.getuser())
+            )
+
+            if changed:
+                self.refresh_page(preferred_report="audit.report")
+                self.ready_pub_status_var.set("Successful!")
+            else:
+                self.ready_pub_status_var.set("")
+
+        except Exception as error:
+            self.ready_pub_status_var.set("Failed")
+            messagebox.showerror("READY_Pub Failed", str(error))
+
+        finally:
+            if hasattr(self, "ready_pub_button") and self.ready_pub_button.winfo_exists():
+                self.ready_pub_button.configure(state="normal")
 
     def leave_audit_comment(self):
         comment_text = self.audit_comment_var.get().strip()
@@ -1438,7 +1540,7 @@ class AppDetailsFrame(ttk.Frame):
 
         if preferred_action in available_actions:
             selected_action = preferred_action
-        elif self.status.strip().upper() == "READY_PUB":
+        elif self.status.strip().upper() == "SUCCESS_PUB":
             selected_action = "Update Inventory Variables"
         else:
             selected_action = placeholder_action
