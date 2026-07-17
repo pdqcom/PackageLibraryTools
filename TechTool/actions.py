@@ -517,6 +517,107 @@ def change_status(app_path, status_file, new_status, report_folder, current_user
 
     return True
 
+def change_status_with_reason(app_path, status_file, new_status, reason, report_folder, current_user=None):
+    if not status_file or not os.path.isfile(status_file):
+        messagebox.showwarning("Missing Status File", "No existing status file was found.")
+        return False
+
+    reason = (reason or "").strip()
+
+    if not reason:
+        messagebox.showwarning("Reason Required", "Enter a reason for this status change.")
+        return False
+
+    with open(status_file, "r", encoding="utf-8", errors="replace") as file: original_contents = file.read()
+    updated_contents = f"{original_contents.rstrip()},{reason}"
+
+    try:
+        with open(status_file, "w", encoding="utf-8", errors="replace") as file:
+            file.write(updated_contents)
+
+        changed = change_status(app_path=app_path, status_file=status_file, new_status=new_status, report_folder=report_folder, current_user=current_user)
+
+        if not changed:
+            with open(status_file, "w", encoding="utf-8", errors="replace") as file: file.write(original_contents)
+            return False
+
+        append_tech_tool_audit_log(report_folder=report_folder, comment_text=f"{new_status} reason: {reason}", current_user=current_user)
+        return True
+
+    except Exception:
+        if os.path.isfile(status_file):
+            try:
+                with open(status_file, "w", encoding="utf-8", errors="replace") as file: file.write(original_contents)
+            except Exception: pass
+
+        raise
+
+def deny_package(app_path, status_file, reason, delete_files, report_folder, current_user=None):
+    if not app_path or not os.path.isdir(app_path):
+        messagebox.showwarning("Missing Package Folder", "No package folder was found.")
+        return False
+
+    if not status_file or not os.path.isfile(status_file):
+        messagebox.showwarning("Missing Status File", "No existing status file was found.")
+        return False
+
+    reason = (reason or "").strip()
+
+    if not reason:
+        messagebox.showwarning("Reason Required", "Enter a reason for denying this package.")
+        return False
+
+    denied_status_file = os.path.join(app_path, "DENIED.status")
+
+    if os.path.normcase(os.path.abspath(status_file)) == os.path.normcase(os.path.abspath(denied_status_file)):
+        messagebox.showwarning("Already Denied", "This package is already set to DENIED.")
+        return False
+
+    if os.path.exists(denied_status_file):
+        messagebox.showwarning("Status File Exists", f"That status file already exists:\n{denied_status_file}")
+        return False
+
+    with open(status_file, "r", encoding="utf-8", errors="replace") as file: original_contents = file.read()
+
+    version = original_contents.split(",", 1)[0].strip()
+    denied_contents = f"{version},{reason}"
+
+    try:
+        with open(status_file, "w", encoding="utf-8", errors="replace") as file: file.write(denied_contents)
+
+        os.rename(status_file, denied_status_file)
+
+        append_tech_tool_audit_log(
+            report_folder=report_folder,
+            action=f"ResetStatus to DENIED; DeleteFiles={delete_files}",
+            target_path=status_file,
+            current_user=current_user
+        )
+
+        append_tech_tool_audit_log(
+            report_folder=report_folder,
+            comment_text=f"DENIED reason: {reason}",
+            current_user=current_user
+        )
+
+        if delete_files:
+            for entry in os.scandir(app_path):
+                if os.path.normcase(os.path.abspath(entry.path)) == os.path.normcase(os.path.abspath(denied_status_file)): continue
+                if entry.is_dir(): shutil.rmtree(entry.path)
+                else: os.remove(entry.path)
+
+        return True
+
+    except Exception:
+        if os.path.isfile(denied_status_file) and not os.path.exists(status_file):
+            try:
+                os.rename(denied_status_file, status_file)
+                with open(status_file, "w", encoding="utf-8", errors="replace") as file: file.write(original_contents)
+            except Exception:
+                pass
+
+        raise
+
 def update_inventory_variables(app_path, new_inventory_name=None, new_inventory_version=None, report_folder=None, current_user=None):
     if not app_path or not os.path.isdir(app_path):
         messagebox.showwarning("Missing Path", "No package path was found.")
