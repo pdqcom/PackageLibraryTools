@@ -897,9 +897,20 @@ class AppDetailsFrame(ttk.Frame):
         self.installer_status_var = tk.StringVar()
         self.installer_source_var = tk.StringVar(value="URL")
         self.local_installer_var = tk.StringVar()
+        self.ready_pub_app_name_var = tk.StringVar()
+        self.ready_pub_inventory_variable_var = tk.StringVar()
+        self.ready_pub_inventory_version_var = tk.StringVar()
+        self.ready_pub_xml_path_var = tk.StringVar()
+        self.ready_pub_status_var = tk.StringVar()
+        self.hold_reason_var = tk.StringVar()
+        self.hold_status_var = tk.StringVar()
+        self.denied_reason_var = tk.StringVar()
+        self.denied_status_var = tk.StringVar()
+        self.denied_delete_files_var = tk.BooleanVar(value=True)
         self.link_font = font.nametofont("TkDefaultFont").copy()
         self.link_hover_font = self.link_font.copy()
         self.link_hover_font.configure(underline=True)
+        self.inline_confirmation_frame = None
 
         self.build_ui()
 
@@ -979,8 +990,8 @@ class AppDetailsFrame(ttk.Frame):
         self.action_selector.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         self.action_selector.bind("<<ComboboxSelected>>", lambda event: self.render_selected_action())
 
-        self.action_content_frame = ttk.Frame(self.actions_frame, padding=8)
-        self.action_content_frame.grid(row=1, column=0, sticky="nsew")
+        self.action_content_frame = ttk.Frame(self.actions_frame)
+        self.action_content_frame.grid(row=1, column=0, sticky="nsew", padx=(8, 10), pady=(0, 8))
         self.action_content_frame.columnconfigure(0, weight=1)
 
         #Right Frame
@@ -1375,6 +1386,21 @@ class AppDetailsFrame(ttk.Frame):
         menu.tk_popup(x, y)
 
     def change_status(self, new_status):
+        if new_status == "READY_Pub":
+            self.selected_action_var.set("Before that Status Change...")
+            self.render_ready_pub_status_action()
+            return
+
+        if new_status == "HOLD":
+            self.selected_action_var.set("Before that Status Change...")
+            self.render_hold_status_action()
+            return
+
+        if new_status == "DENIED":
+            self.selected_action_var.set("Before that Status Change...")
+            self.render_denied_status_action()
+            return
+
         try:
             changed = actions.change_status(
                 app_path=self.app_path,
@@ -1389,6 +1415,285 @@ class AppDetailsFrame(ttk.Frame):
 
         except Exception as error:
             messagebox.showerror("Status Change Failed", str(error))
+
+    def render_ready_pub_status_action(self):
+        self.clear_action_content()
+        self.action_content_frame.columnconfigure(0, weight=0)
+        self.action_content_frame.columnconfigure(1, weight=1)
+
+        inventory_variable, inventory_version, xml_path = actions.get_ready_pub_defaults(
+            app_path=self.app_path,
+            version_folder=self.get_report_folder(),
+            fallback_version=self.version
+        )
+
+        self.ready_pub_app_name_var.set(self.app_name)
+        self.ready_pub_inventory_variable_var.set(inventory_variable)
+        self.ready_pub_inventory_version_var.set(inventory_version)
+        self.ready_pub_xml_path_var.set(xml_path)
+        self.ready_pub_status_var.set("")
+
+        ttk.Label(self.action_content_frame, text="App Name:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        app_name_entry = ttk.Entry(self.action_content_frame, textvariable=self.ready_pub_app_name_var)
+        app_name_entry.grid(row=0, column=1, sticky="ew", pady=3)
+
+        ttk.Label(self.action_content_frame, text="Inventory Variable:").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        inventory_variable_entry = ttk.Entry(self.action_content_frame, textvariable=self.ready_pub_inventory_variable_var)
+        inventory_variable_entry.grid(row=1, column=1, sticky="ew", pady=3)
+
+        ttk.Label(self.action_content_frame, text="Inventory Version:").grid(row=2, column=0, sticky="w", padx=(0, 8))
+        inventory_version_entry = ttk.Entry(self.action_content_frame, textvariable=self.ready_pub_inventory_version_var)
+        inventory_version_entry.grid(row=2, column=1, sticky="ew", pady=3)
+
+        ttk.Label(self.action_content_frame, text="XML Path:").grid(row=3, column=0, sticky="w", padx=(0, 8))
+        xml_path_entry = ttk.Entry(self.action_content_frame, textvariable=self.ready_pub_xml_path_var)
+        xml_path_entry.grid(row=3, column=1, sticky="ew", pady=3)
+
+        button_frame = ttk.Frame(self.action_content_frame)
+        button_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        button_frame.columnconfigure(0, weight=1)
+        button_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(button_frame, textvariable=self.ready_pub_status_var, foreground="green").grid(row=0, column=0, sticky="w")
+
+        self.ready_pub_button = ttk.Button(button_frame, text="Generate Files and Update Status", command=self.prepare_ready_pub)
+        self.ready_pub_button.grid(row=0, column=1, sticky="e")
+
+        app_name_entry.bind("<KeyRelease>", lambda event: self.ready_pub_status_var.set(""))
+        inventory_variable_entry.bind("<KeyRelease>", lambda event: self.ready_pub_status_var.set(""))
+        inventory_version_entry.bind("<KeyRelease>", lambda event: self.ready_pub_status_var.set(""))
+        xml_path_entry.bind("<KeyRelease>", lambda event: self.ready_pub_status_var.set(""))
+
+        app_name_entry.focus_set()
+
+        self.update_idletasks()
+        xml_path_entry.xview_moveto(1)
+
+
+    def prepare_ready_pub(self):
+        self.ready_pub_status_var.set("Generating files...")
+        self.ready_pub_button.configure(state="disabled")
+        self.update_idletasks()
+
+        try:
+            changed = actions.prepare_ready_pub(
+                app_path=self.app_path,
+                status_file=self.status_file,
+                repo_path=self.controller.viewer_frame.repo_path.get(),
+                app_name=self.ready_pub_app_name_var.get(),
+                inventory_variable=self.ready_pub_inventory_variable_var.get(),
+                inventory_version=self.ready_pub_inventory_version_var.get(),
+                xml_path=self.ready_pub_xml_path_var.get(),
+                version_folder=self.get_report_folder(),
+                current_user=getattr(self.controller, "current_user", getpass.getuser())
+            )
+
+            if changed:
+                self.refresh_page(preferred_report="audit.report")
+                self.ready_pub_status_var.set("Successful!")
+            else:
+                self.ready_pub_status_var.set("")
+
+        except Exception as error:
+            self.ready_pub_status_var.set("Failed")
+            messagebox.showerror("READY_Pub Failed", str(error))
+
+        finally:
+            if hasattr(self, "ready_pub_button") and self.ready_pub_button.winfo_exists():
+                self.ready_pub_button.configure(state="normal")
+
+    def render_hold_status_action(self):
+        self.clear_action_content()
+        self.action_content_frame.columnconfigure(0, weight=1)
+        self.action_content_frame.columnconfigure(1, weight=0)
+
+        self.hold_reason_var.set("")
+        self.hold_status_var.set("")
+
+        ttk.Label(
+            self.action_content_frame,
+            text="Putting a package on hold stops the package from moving further down the process, but keeps it open for new updates in the future.",
+            wraplength=400
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        ttk.Label(self.action_content_frame, text="Reason for change:").grid(row=1, column=0, sticky="w")
+
+        reason_entry = ttk.Entry(self.action_content_frame, textvariable=self.hold_reason_var)
+        reason_entry.grid(row=2, column=0, sticky="ew", pady=(3, 8))
+
+        button_frame = ttk.Frame(self.action_content_frame)
+        button_frame.grid(row=3, column=0, sticky="ew")
+        button_frame.columnconfigure(0, weight=1)
+
+        self.hold_status_label = ttk.Label(button_frame, textvariable=self.hold_status_var)
+        self.hold_status_label.grid(row=0, column=0, sticky="w")
+
+        self.hold_button = ttk.Button(button_frame, text="Update Status", command=self.request_hold_confirmation)
+        self.hold_button.grid(row=0, column=1, sticky="e")
+
+        reason_entry.bind("<KeyRelease>", lambda event: self.reset_hold_confirmation())
+        reason_entry.focus_set()
+
+
+    def request_hold_confirmation(self):
+        reason = self.hold_reason_var.get().strip()
+
+        if not reason:
+            self.hold_status_label.configure(foreground="red")
+            self.hold_status_var.set("Reason Required")
+            return
+
+        self.hold_status_label.configure(foreground="green")
+
+        self.show_inline_confirmation(
+            button=self.hold_button,
+            status_label=self.hold_status_label,
+            status_var=self.hold_status_var,
+            confirm_callback=self.prepare_hold
+        )
+
+    def reset_hold_confirmation(self):
+        if not hasattr(self, "hold_button") or not self.hold_button.winfo_exists():
+            return
+
+        self.cancel_inline_confirmation(
+            button=self.hold_button,
+            status_label=self.hold_status_label,
+            status_var=self.hold_status_var
+        )
+
+
+    def prepare_hold(self):
+        reason = self.hold_reason_var.get().strip()
+
+        if not reason:
+            self.hold_status_var.set("Reason Required")
+            self.hold_button.grid()
+            return
+
+        self.hold_status_var.set("Updating...")
+        self.hold_button.configure(state="disabled")
+        self.update_idletasks()
+
+        try:
+            changed = actions.change_status_with_reason(
+                app_path=self.app_path,
+                status_file=self.status_file,
+                new_status="HOLD",
+                reason=reason,
+                report_folder=self.get_report_folder(),
+                current_user=getattr(self.controller, "current_user", getpass.getuser())
+            )
+
+            if changed:
+                self.refresh_page(preferred_report="audit.report")
+            else:
+                self.hold_status_var.set("")
+                self.hold_button.configure(state="normal")
+                self.hold_button.grid()
+
+        except Exception as error:
+            self.hold_status_var.set("Failed")
+            self.hold_button.configure(state="normal")
+            self.hold_button.grid()
+            messagebox.showerror("HOLD Failed", str(error))
+
+    def render_denied_status_action(self):
+        self.clear_action_content()
+        self.action_content_frame.columnconfigure(0, weight=1)
+
+        self.denied_reason_var.set("")
+        self.denied_status_var.set("")
+        self.denied_delete_files_var.set(True)
+
+        ttk.Label(self.action_content_frame, text="Denying this package will stop it from moving through the workflow.", wraplength=400, foreground="#B00020").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(self.action_content_frame, text="Reason for denial:").grid(row=1, column=0, sticky="w")
+
+        reason_entry = ttk.Entry(self.action_content_frame, textvariable=self.denied_reason_var)
+        reason_entry.grid(row=2, column=0, sticky="ew", pady=(3, 8))
+
+        ttk.Checkbutton(self.action_content_frame, text="Delete package files (leave only DENIED.status)", variable=self.denied_delete_files_var).grid(row=3, column=0, sticky="w", pady=(0, 8))
+
+        button_frame = ttk.Frame(self.action_content_frame)
+        button_frame.grid(row=4, column=0, sticky="ew")
+        button_frame.columnconfigure(0, weight=1)
+
+        self.denied_status_label = ttk.Label(button_frame, textvariable=self.denied_status_var)
+        self.denied_status_label.grid(row=0, column=0, sticky="w")
+
+        self.denied_button = ttk.Button(button_frame, text="Deny Package", command=self.request_denied_confirmation)
+        self.denied_button.grid(row=0, column=1, sticky="e")
+
+        reason_entry.bind("<KeyRelease>", lambda event: self.reset_denied_confirmation())
+        reason_entry.focus_set()
+
+    def request_denied_confirmation(self):
+        reason = self.denied_reason_var.get().strip()
+
+        if not reason:
+            self.denied_status_label.configure(foreground="red")
+            self.denied_status_var.set("Reason Required")
+            return
+
+        self.denied_status_label.configure(foreground="green")
+
+        self.show_inline_confirmation(
+            button=self.denied_button,
+            status_label=self.denied_status_label,
+            status_var=self.denied_status_var,
+            confirm_callback=self.prepare_denied,
+            confirm_text="<- Permanently deny?"
+        )
+
+    def reset_denied_confirmation(self):
+        if not hasattr(self, "denied_button") or not self.denied_button.winfo_exists():
+            return
+
+        self.cancel_inline_confirmation(
+            button=self.denied_button,
+            status_label=self.denied_status_label,
+            status_var=self.denied_status_var
+        )
+
+    def prepare_denied(self):
+        reason = self.denied_reason_var.get().strip()
+
+        if not reason:
+            self.denied_status_label.configure(foreground="red")
+            self.denied_status_var.set("Reason Required")
+            self.denied_button.grid()
+            return
+
+        self.denied_status_label.configure(foreground="green")
+        self.denied_status_var.set("Denying package...")
+        self.denied_button.configure(state="disabled")
+        self.update_idletasks()
+
+        try:
+            changed = actions.deny_package(
+                app_path=self.app_path,
+                status_file=self.status_file,
+                reason=reason,
+                delete_files=self.denied_delete_files_var.get(),
+                report_folder=self.get_report_folder(),
+                current_user=getattr(self.controller, "current_user", getpass.getuser())
+            )
+
+            if changed:
+                self.refresh_page()
+            else:
+                self.denied_status_var.set("")
+                self.denied_button.configure(state="normal")
+                self.denied_button.grid()
+
+        except Exception as error:
+            self.denied_status_label.configure(foreground="red")
+            self.denied_status_var.set("Failed")
+            self.denied_button.configure(state="normal")
+            self.denied_button.grid()
+            messagebox.showerror("DENIED Failed", str(error))
+
+    
 
     def leave_audit_comment(self):
         comment_text = self.audit_comment_var.get().strip()
@@ -1438,7 +1743,7 @@ class AppDetailsFrame(ttk.Frame):
 
         if preferred_action in available_actions:
             selected_action = preferred_action
-        elif self.status.strip().upper() == "READY_PUB":
+        elif self.status.strip().upper() == "SUCCESS_PUB":
             selected_action = "Update Inventory Variables"
         else:
             selected_action = placeholder_action
@@ -1450,6 +1755,51 @@ class AppDetailsFrame(ttk.Frame):
     def clear_action_content(self):
         for widget in self.action_content_frame.winfo_children():
             widget.destroy()
+
+        self.action_content_frame.columnconfigure(0, weight=0)
+        self.action_content_frame.columnconfigure(1, weight=0)
+
+    def show_inline_confirmation(self, button, status_label, status_var, confirm_callback, confirm_text="<- Confirm Change"):
+        self.cancel_inline_confirmation(button, status_label, status_var)
+
+        parent = button.master
+        button.grid_remove()
+        status_label.grid_remove()
+
+        self.inline_confirmation_frame = ttk.Frame(parent)
+        self.inline_confirmation_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.inline_confirmation_frame.columnconfigure(1, weight=1)
+
+        def confirm():
+            self.cancel_inline_confirmation(button, status_label, status_var)
+            confirm_callback()
+
+        def cancel():
+            self.cancel_inline_confirmation(button, status_label, status_var)
+
+        button_group = ttk.Frame(self.inline_confirmation_frame)
+        button_group.grid(row=0, column=0, sticky="w")
+
+        ttk.Button(button_group, text="Yes", width=8, command=confirm).pack(side="left")
+        ttk.Button(button_group, text="Cancel", width=8, command=cancel).pack(side="left", padx=(5, 0))
+
+        ttk.Label(self.inline_confirmation_frame, text=confirm_text).grid(row=0, column=1, sticky="e")
+
+
+    def cancel_inline_confirmation(self, button, status_label, status_var):
+        confirmation_frame = getattr(self, "inline_confirmation_frame", None)
+
+        if confirmation_frame is not None and confirmation_frame.winfo_exists():
+            confirmation_frame.destroy()
+
+        self.inline_confirmation_frame = None
+        status_var.set("")
+
+        if status_label.winfo_exists():
+            status_label.grid()
+
+        if button.winfo_exists():
+            button.grid()
 
 
     def render_selected_action(self):
