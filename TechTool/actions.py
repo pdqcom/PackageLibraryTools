@@ -2,10 +2,13 @@ import getpass
 import os
 import re
 import shutil
+import tempfile
+import urllib.request
 import webbrowser
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from tkinter import filedialog, messagebox
+from urllib.parse import urlparse
 
 
 # ==========================================
@@ -83,6 +86,113 @@ def append_tech_tool_audit_log(report_folder, action=None, target_path=None, cur
 # ==========================================
 # Universal Actions
 # ==========================================
+
+def get_installer_download_defaults(version_folder):
+    """
+    Returns:
+        download_url: Contents of PackageInstallerURL.txt, or blank.
+        installer_location: Newest XML filename with .exe substituted.
+    """
+    if not version_folder or not os.path.isdir(version_folder):
+        return "", ""
+
+    url_file_path = os.path.join(version_folder, "PackageInstallerURL.txt")
+    download_url = ""
+
+    if os.path.isfile(url_file_path):
+        try:
+            with open(url_file_path, "r", encoding="utf-8", errors="replace") as file:
+                download_url = file.read().strip()
+        except Exception:
+            download_url = ""
+
+    xml_files = [entry for entry in os.scandir(version_folder) if entry.is_file() and entry.name.lower().endswith(".xml")]
+
+    if not xml_files:
+        return download_url, ""
+
+    xml_files.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
+
+    xml_basename = os.path.splitext(xml_files[0].name)[0]
+    installer_location = os.path.join(version_folder, f"{xml_basename}.exe")
+
+    return download_url, installer_location
+
+
+def download_and_replace_installer(version_folder, download_url, installer_location, report_folder=None, current_user=None):
+    if not version_folder or not os.path.isdir(version_folder):
+        messagebox.showwarning("Missing Version Folder", "No version folder was found.")
+        return False
+
+    download_url = (download_url or "").strip()
+    installer_location = (installer_location or "").strip().strip('"')
+
+    if not download_url:
+        messagebox.showwarning("Missing URL", "Enter an installer download URL.")
+        return False
+
+    parsed_url = urlparse(download_url)
+
+    if parsed_url.scheme.lower() not in ("http", "https"):
+        messagebox.showwarning("Invalid URL", "The installer URL must begin with http:// or https://.")
+        return False
+
+    if not installer_location:
+        messagebox.showwarning("Missing Location", "Enter the installer location.")
+        return False
+
+    if os.path.isabs(installer_location):
+        destination_path = os.path.normpath(installer_location)
+    else:
+        destination_path = os.path.normpath(os.path.join(version_folder, installer_location))
+
+    destination_folder = os.path.dirname(destination_path) or version_folder
+
+    if not os.path.isdir(destination_folder):
+        messagebox.showwarning("Destination Not Found", f"The destination folder does not exist:\n{destination_folder}")
+        return False
+
+    url_file_path = os.path.join(version_folder, "PackageInstallerURL.txt")
+    temporary_path = ""
+
+    try:
+        temporary_file = tempfile.NamedTemporaryFile(prefix="TechToolInstaller_", suffix=".download", dir=destination_folder, delete=False)
+        temporary_path = temporary_file.name
+        temporary_file.close()
+
+        request = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"})
+
+        with urllib.request.urlopen(request, timeout=120) as response:
+            status_code = getattr(response, "status", 200)
+
+            if status_code < 200 or status_code >= 300:
+                raise Exception(f"Download returned HTTP status {status_code}.")
+
+            with open(temporary_path, "wb") as output_file:
+                shutil.copyfileobj(response, output_file)
+
+        if not os.path.isfile(temporary_path):
+            raise Exception("The downloaded temporary file was not created.")
+
+        if os.path.getsize(temporary_path) <= 0:
+            raise Exception("The downloaded file was empty.")
+
+        os.replace(temporary_path, destination_path)
+        temporary_path = ""
+
+        with open(url_file_path, "w", encoding="utf-8", errors="replace") as file:
+            file.write(download_url)
+
+        append_tech_tool_audit_log(report_folder=report_folder, action=f"DownloadAndReplaceInstaller: {download_url}", target_path=destination_path, current_user=current_user)
+
+        return True
+
+    finally:
+        if temporary_path and os.path.isfile(temporary_path):
+            try:
+                os.remove(temporary_path)
+            except Exception:
+                pass
 
 def copy_directory(source_path, report_folder, current_user=None):
     if not source_path:
