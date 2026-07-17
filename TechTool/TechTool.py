@@ -895,6 +895,8 @@ class AppDetailsFrame(ttk.Frame):
         self.installer_url_var = tk.StringVar()
         self.installer_location_var = tk.StringVar()
         self.installer_status_var = tk.StringVar()
+        self.installer_source_var = tk.StringVar(value="URL")
+        self.local_installer_var = tk.StringVar()
         self.link_font = font.nametofont("TkDefaultFont").copy()
         self.link_hover_font = self.link_font.copy()
         self.link_hover_font.configure(underline=True)
@@ -1673,20 +1675,44 @@ class AppDetailsFrame(ttk.Frame):
         version_folder = self.get_report_folder()
         current_url, default_location = actions.get_installer_download_defaults(version_folder)
 
+        self.installer_source_var.set("URL")
         self.installer_url_var.set(current_url)
+        self.local_installer_var.set("")
         self.installer_location_var.set(self.format_repo_path(default_location))
         self.installer_status_var.set("")
 
-        ttk.Label(self.action_content_frame, text="URL:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w")
+        source_header_frame = ttk.Frame(self.action_content_frame)
+        source_header_frame.grid(row=0, column=0, sticky="ew")
+        source_header_frame.columnconfigure(2, weight=1)
 
-        url_entry = ttk.Entry(self.action_content_frame, textvariable=self.installer_url_var)
-        url_entry.grid(row=1, column=0, sticky="ew", pady=(3, 8))
+        ttk.Label(source_header_frame, text="Source:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(source_header_frame, text="URL", variable=self.installer_source_var, value="URL", command=self.update_installer_source_mode).grid(row=0, column=1, sticky="w", padx=(10, 5))
+        ttk.Radiobutton(source_header_frame, text="Local", variable=self.installer_source_var, value="Local", command=self.update_installer_source_mode).grid(row=0, column=2, sticky="w")
+
+        source_content_frame = ttk.Frame(self.action_content_frame)
+        source_content_frame.grid(row=1, column=0, sticky="ew", pady=(3, 8))
+        source_content_frame.columnconfigure(0, weight=1)
+
+        self.installer_url_frame = ttk.Frame(source_content_frame)
+        self.installer_url_frame.grid(row=0, column=0, sticky="ew")
+        self.installer_url_frame.columnconfigure(0, weight=1)
+
+        self.installer_url_entry = ttk.Entry(self.installer_url_frame, textvariable=self.installer_url_var)
+        self.installer_url_entry.grid(row=0, column=0, sticky="ew")
+
+        self.installer_local_frame = ttk.Frame(source_content_frame)
+        self.installer_local_frame.grid(row=0, column=0, sticky="ew")
+        self.installer_local_frame.columnconfigure(0, weight=1)
+
+        self.local_installer_entry = ttk.Entry(self.installer_local_frame, textvariable=self.local_installer_var)
+        self.local_installer_entry.grid(row=0, column=0, sticky="ew")
+
+        ttk.Button(self.installer_local_frame, text="Browse", command=self.browse_local_installer).grid(row=0, column=1, padx=(5, 0))
 
         ttk.Label(self.action_content_frame, text="Location:", font=("Segoe UI", 9, "bold")).grid(row=2, column=0, sticky="w")
 
         location_entry = ttk.Entry(self.action_content_frame, textvariable=self.installer_location_var)
         location_entry.grid(row=3, column=0, sticky="ew", pady=(3, 8))
-        self.after_idle(lambda: location_entry.xview_moveto(1))
 
         button_frame = ttk.Frame(self.action_content_frame)
         button_frame.grid(row=4, column=0, sticky="ew")
@@ -1694,26 +1720,35 @@ class AppDetailsFrame(ttk.Frame):
         button_frame.columnconfigure(1, weight=1)
 
         ttk.Label(button_frame, textvariable=self.installer_status_var, foreground="green").grid(row=0, column=0, sticky="w")
-        self.download_replace_button = ttk.Button(button_frame, text="Download and Replace", command=self.download_and_replace_installer)
+
+        self.download_replace_button = ttk.Button(button_frame, text="Replace", command=self.download_and_replace_installer)
         self.download_replace_button.grid(row=0, column=1, sticky="e")
 
-        url_entry.bind("<KeyRelease>", lambda event: self.installer_status_var.set(""))
+        self.installer_url_entry.bind("<KeyRelease>", lambda event: self.installer_status_var.set(""))
+        self.local_installer_entry.bind("<KeyRelease>", lambda event: self.installer_status_var.set(""))
         location_entry.bind("<KeyRelease>", lambda event: self.installer_status_var.set(""))
 
-        url_entry.focus_set()
+        self.update_installer_source_mode()
+
+        self.update_idletasks()
+        location_entry.xview_moveto(1)
 
 
     def download_and_replace_installer(self):
-        self.installer_status_var.set("Downloading...")
+        source_mode = self.installer_source_var.get()
+        self.installer_status_var.set("Downloading..." if source_mode == "URL" else "Replacing...")
         self.download_replace_button.configure(state="disabled")
         self.update_idletasks()
 
         try:
             changed = actions.download_and_replace_installer(
                 version_folder=self.get_report_folder(),
+                source_mode=source_mode,
                 download_url=self.installer_url_var.get(),
-                installer_location=self.expand_repo_path(self.installer_location_var.get()), 
-                report_folder=self.get_report_folder(), current_user=getattr(self.controller, "current_user", getpass.getuser())
+                local_installer_path=self.local_installer_var.get(),
+                installer_location=self.expand_repo_path(self.installer_location_var.get()),
+                report_folder=self.get_report_folder(),
+                current_user=getattr(self.controller, "current_user", getpass.getuser())
             )
 
             if changed:
@@ -1729,6 +1764,31 @@ class AppDetailsFrame(ttk.Frame):
         finally:
             if hasattr(self, "download_replace_button"):
                 self.download_replace_button.configure(state="normal")
+
+    def browse_local_installer(self):
+        selected_path = filedialog.askopenfilename(title="Select Installer", filetypes=[("Installer Files", "*.exe *.msi *.msix *.msixbundle *.appx *.appxbundle"), ("All Files", "*.*")])
+
+        if not selected_path:
+            return
+
+        self.local_installer_var.set(selected_path)
+        self.installer_status_var.set("")
+
+        if hasattr(self, "local_installer_entry"):
+            self.after_idle(lambda: self.local_installer_entry.xview_moveto(1))
+
+
+    def update_installer_source_mode(self):
+        self.installer_status_var.set("")
+
+        if self.installer_source_var.get() == "Local":
+            self.installer_url_frame.grid_remove()
+            self.installer_local_frame.grid()
+            self.local_installer_entry.focus_set()
+        else:
+            self.installer_local_frame.grid_remove()
+            self.installer_url_frame.grid()
+            self.installer_url_entry.focus_set()
 
 
 

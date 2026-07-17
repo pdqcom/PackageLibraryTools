@@ -119,32 +119,22 @@ def get_installer_download_defaults(version_folder):
     return download_url, installer_location
 
 
-def download_and_replace_installer(version_folder, download_url, installer_location, report_folder=None, current_user=None):
+def download_and_replace_installer(version_folder, source_mode, download_url, local_installer_path, installer_location, report_folder=None, current_user=None):
     if not version_folder or not os.path.isdir(version_folder):
         messagebox.showwarning("Missing Version Folder", "No version folder was found.")
         return False
 
+    source_mode = (source_mode or "URL").strip()
     download_url = (download_url or "").strip()
+    local_installer_path = (local_installer_path or "").strip().strip('"')
     installer_location = (installer_location or "").strip().strip('"')
-
-    if not download_url:
-        messagebox.showwarning("Missing URL", "Enter an installer download URL.")
-        return False
-
-    parsed_url = urlparse(download_url)
-
-    if parsed_url.scheme.lower() not in ("http", "https"):
-        messagebox.showwarning("Invalid URL", "The installer URL must begin with http:// or https://.")
-        return False
 
     if not installer_location:
         messagebox.showwarning("Missing Location", "Enter the installer location.")
         return False
 
-    if os.path.isabs(installer_location):
-        destination_path = os.path.normpath(installer_location)
-    else:
-        destination_path = os.path.normpath(os.path.join(version_folder, installer_location))
+    if os.path.isabs(installer_location): destination_path = os.path.normpath(installer_location)
+    else: destination_path = os.path.normpath(os.path.join(version_folder, installer_location))
 
     destination_folder = os.path.dirname(destination_path) or version_folder
 
@@ -152,39 +142,59 @@ def download_and_replace_installer(version_folder, download_url, installer_locat
         messagebox.showwarning("Destination Not Found", f"The destination folder does not exist:\n{destination_folder}")
         return False
 
+    if source_mode == "Local":
+        if not local_installer_path:
+            messagebox.showwarning("Missing Installer", "Select a local installer.")
+            return False
+
+        if not os.path.isfile(local_installer_path):
+            messagebox.showwarning("Installer Not Found", f"The selected installer does not exist:\n{local_installer_path}")
+            return False
+
+        if os.path.normcase(os.path.abspath(local_installer_path)) == os.path.normcase(os.path.abspath(destination_path)):
+            messagebox.showwarning("Same File", "The selected installer is already the destination file.")
+            return False
+
+    else:
+        if not download_url:
+            messagebox.showwarning("Missing URL", "Enter an installer download URL.")
+            return False
+
+        parsed_url = urlparse(download_url)
+
+        if parsed_url.scheme.lower() not in ("http", "https"):
+            messagebox.showwarning("Invalid URL", "The installer URL must begin with http:// or https://.")
+            return False
+
     url_file_path = os.path.join(version_folder, "PackageInstallerURL.txt")
     temporary_path = ""
 
     try:
-        temporary_file = tempfile.NamedTemporaryFile(prefix="TechToolInstaller_", suffix=".download", dir=destination_folder, delete=False)
+        temporary_file = tempfile.NamedTemporaryFile(prefix="TechToolInstaller_", suffix=".replacement", dir=destination_folder, delete=False)
         temporary_path = temporary_file.name
         temporary_file.close()
 
-        request = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"})
+        if source_mode == "Local": shutil.copy2(local_installer_path, temporary_path)
+        else:
+            request = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"})
 
-        with urllib.request.urlopen(request, timeout=120) as response:
-            status_code = getattr(response, "status", 200)
+            with urllib.request.urlopen(request, timeout=120) as response:
+                status_code = getattr(response, "status", 200)
+                if status_code < 200 or status_code >= 300: raise Exception(f"Download returned HTTP status {status_code}.")
+                with open(temporary_path, "wb") as output_file: shutil.copyfileobj(response, output_file)
 
-            if status_code < 200 or status_code >= 300:
-                raise Exception(f"Download returned HTTP status {status_code}.")
-
-            with open(temporary_path, "wb") as output_file:
-                shutil.copyfileobj(response, output_file)
-
-        if not os.path.isfile(temporary_path):
-            raise Exception("The downloaded temporary file was not created.")
-
-        if os.path.getsize(temporary_path) <= 0:
-            raise Exception("The downloaded file was empty.")
+        if not os.path.isfile(temporary_path): raise Exception("The temporary installer file was not created.")
+        if os.path.getsize(temporary_path) <= 0: raise Exception("The installer file was empty.")
 
         os.replace(temporary_path, destination_path)
         temporary_path = ""
 
-        with open(url_file_path, "w", encoding="utf-8", errors="replace") as file:
-            file.write(download_url)
+        if source_mode == "URL":
+            with open(url_file_path, "w", encoding="utf-8", errors="replace") as file: file.write(download_url)
+            audit_action = f"DownloadAndReplaceInstaller: {download_url}"
+        else: audit_action = f"ReplaceInstallerFromLocal: {local_installer_path}"
 
-        append_tech_tool_audit_log(report_folder=report_folder, action=f"DownloadAndReplaceInstaller: {download_url}", target_path=destination_path, current_user=current_user)
-
+        append_tech_tool_audit_log(report_folder=report_folder, action=audit_action, target_path=destination_path, current_user=current_user)
         return True
 
     finally:
