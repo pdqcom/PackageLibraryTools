@@ -1116,7 +1116,7 @@ class AppDetailsFrame(ttk.Frame):
             setattr(self, f"{attr_name}_label", label_widget)
             setattr(self, f"{attr_name}_widget", value_widget)
 
-    def load_app(self, app_data, preferred_report=None, preserve_report=True):
+    def load_app(self, app_data, preferred_report=None, preserve_report=True, preferred_action=None):
         self.app_name = app_data.get("App", "")
         self.app_path = app_data.get("Path", "")
         self.version = app_data.get("Version", "")
@@ -1173,7 +1173,7 @@ class AppDetailsFrame(ttk.Frame):
 
         self.load_app_icon()
         self.load_details()
-        self.load_actions()
+        self.load_actions(preferred_action=preferred_action)
 
         
 
@@ -1341,8 +1341,9 @@ class AppDetailsFrame(ttk.Frame):
             messagebox.showerror("Copy Failed", str(error))
     
     def refresh_page(self, preferred_report=None):
-        refreshed_app_data = self.controller.viewer_frame.get_app_data(app_path=self.app_path,app_name=self.app_name)
-        self.load_app(refreshed_app_data, preferred_report=preferred_report, preserve_report=True)
+        selected_action = self.selected_action_var.get()
+        refreshed_app_data = self.controller.viewer_frame.get_app_data(app_path=self.app_path, app_name=self.app_name)
+        self.load_app(refreshed_app_data, preferred_report=preferred_report, preserve_report=True, preferred_action=selected_action)
 
     def show_status_menu(self):
         menu = tk.Menu(self, tearoff=False)
