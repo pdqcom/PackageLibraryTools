@@ -4,6 +4,7 @@ import re
 import threading
 import tkinter as tk
 import shutil
+import winreg
 import actions
 import getpass
 from tkinter import ttk, filedialog, messagebox, font
@@ -70,6 +71,9 @@ STATUS_CHANGE_OPTIONS = [
     "HOLD",
 ]
 
+ENVIRONMENT_SETTINGS = [
+    ("OpenAI API Key:", "OpenAI_API_Key"),
+]
 
 class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -363,17 +367,14 @@ class ViewerFrame(ttk.Frame):
             command=self.apply_filters
         )
         self.exclude_new_checkbox.pack(side="left", padx=(10, 0))
+
+        ttk.Button(filter_frame, text="Settings", command=self.open_settings).pack(side="right")
+
         self.bulk_status_frame = ttk.Frame(filter_frame)
-
         ttk.Label(self.bulk_status_frame, text="Bulk Status Change:").pack(side="left", padx=(0, 5))
-
         self.bulk_status_dropdown = ttk.Combobox(self.bulk_status_frame, textvariable=self.bulk_status_var, values=STATUS_CHANGE_OPTIONS, state="readonly", width=18)
         self.bulk_status_dropdown.pack(side="left", padx=(0, 5))
-
         ttk.Button(self.bulk_status_frame, text="Update", command=self.bulk_change_status).pack(side="left")
-
-        self.bulk_status_frame.pack(side="right", padx=(10, 0))
-        self.bulk_status_frame.pack_forget()
 
         columns = ("App", "Version", "New", "Status", "Reason")
 
@@ -779,12 +780,65 @@ class ViewerFrame(ttk.Frame):
         selected_count = len(self.tree.selection())
 
         if selected_count > 1:
-            if not self.bulk_status_frame.winfo_ismapped():
-                self.bulk_status_frame.pack(side="right")
+            if not self.bulk_status_frame.winfo_ismapped(): self.bulk_status_frame.pack(side="right", padx=(10, 5))
         else:
             self.bulk_status_frame.pack_forget()
             self.bulk_status_var.set("Bulk Status Change")
 
+    def open_settings(self):
+        settings_window = tk.Toplevel(self)
+        settings_window.title("Settings")
+        settings_window.resizable(False, False)
+        settings_window.transient(self.winfo_toplevel())
+        settings_window.grab_set()
+
+        container = ttk.Frame(settings_window, padding=12)
+        container.pack(fill="both", expand=True)
+
+        setting_vars = {}
+
+        for row, (label_text, variable_name) in enumerate(ENVIRONMENT_SETTINGS):
+            value_var = tk.StringVar(value=self.get_user_environment_variable(variable_name))
+            setting_vars[variable_name] = value_var
+            ttk.Label(container, text=label_text).grid(row=row, column=0, sticky="e", padx=(0, 8), pady=4)
+            ttk.Entry(container, textvariable=value_var, width=50).grid(row=row, column=1, sticky="ew", pady=4)
+
+        button_frame = ttk.Frame(container)
+        button_frame.grid(row=len(ENVIRONMENT_SETTINGS), column=0, columnspan=2, sticky="e", pady=(10, 0))
+
+        status_var = tk.StringVar()
+        ttk.Label(button_frame, textvariable=status_var, foreground="green").pack(side="left", padx=(0, 10))
+        ttk.Button(button_frame, text="Save", command=lambda: self.save_environment_settings(setting_vars, status_var)).pack(side="left")
+        ttk.Button(button_frame, text="Close", command=settings_window.destroy).pack(side="left", padx=(5, 0))
+
+        settings_window.update_idletasks()
+        width = settings_window.winfo_reqwidth()
+        height = settings_window.winfo_reqheight()
+        x = self.winfo_toplevel().winfo_rootx() + ((self.winfo_toplevel().winfo_width() - width) // 2)
+        y = self.winfo_toplevel().winfo_rooty() + ((self.winfo_toplevel().winfo_height() - height) // 2)
+        settings_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def get_user_environment_variable(self, variable_name):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+                value, _ = winreg.QueryValueEx(key, variable_name)
+                return str(value)
+        except FileNotFoundError:
+            return os.environ.get(variable_name, "")
+
+    def save_environment_settings(self, setting_vars, status_var):
+        try:
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+                for variable_name, value_var in setting_vars.items():
+                    value = value_var.get().strip()
+                    winreg.SetValueEx(key, variable_name, 0, winreg.REG_SZ, value)
+                    os.environ[variable_name] = value
+
+            result = ctypes.c_ulong()
+            ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, ctypes.byref(result))
+            status_var.set("Saved!")
+        except Exception as error:
+            messagebox.showerror("Settings Error", f"Unable to save environment settings:\n{error}")
 
     def get_app_data_from_item(self, item_id):
         values = self.tree.item(item_id, "values")
