@@ -11,11 +11,7 @@ DEFAULT_MODEL = "gpt-5-mini"
 
 def ask_ai(prompt, instructions="", context="", model=DEFAULT_MODEL):
     api_key = os.getenv(API_KEY_ENV)
-
-    if not api_key:
-        raise Exception(f"Environment variable '{API_KEY_ENV}' was not found.")
-
-
+    if not api_key: raise Exception(f"Ai Key '{API_KEY_ENV}' was not found. Please set this value in the app settings.")
 
     body = {
         "model": model,
@@ -56,12 +52,10 @@ def ask_ai(prompt, instructions="", context="", model=DEFAULT_MODEL):
 
     try:
         for item in result["output"]:
-            if item["type"] != "message":
-                continue
+            if item["type"] != "message": continue
 
             for content in item["content"]:
-                if content["type"] == "output_text":
-                    return content["text"]
+                if content["type"] == "output_text": return content["text"]
 
         raise Exception("No assistant response was returned.")
 
