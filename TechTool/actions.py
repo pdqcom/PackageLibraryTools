@@ -8,6 +8,7 @@ import tempfile
 import urllib.request
 import webbrowser
 import xml.etree.ElementTree as ET
+import ai
 from datetime import datetime, timezone
 from tkinter import filedialog, messagebox
 from urllib.parse import urlparse
@@ -88,6 +89,92 @@ def append_tech_tool_audit_log(report_folder, action=None, target_path=None, cur
 # ==========================================
 # Universal Actions
 # ==========================================
+
+def get_version_exception_path(app_path):
+    if not app_path: return ""
+    return os.path.join(app_path, "Version.exception")
+
+
+def load_version_exception(app_path):
+    exception_path = get_version_exception_path(app_path)
+
+    if exception_path and os.path.isfile(exception_path):
+        with open(exception_path, "r", encoding="utf-8", errors="replace") as file: return file.read(), True
+
+    default_contents = """# Exception Summary:
+
+$version = "%%VERSION%%"
+
+### Do things to adjust the Deploy version to match the Inventory version ###
+
+return $version
+"""
+
+    return default_contents, False
+
+
+def save_version_exception(app_path, exception_contents, report_folder=None, current_user=None):
+    if not app_path or not os.path.isdir(app_path):
+        messagebox.showwarning("Missing Package Folder", "No package folder was found.")
+        return False
+
+    exception_contents = exception_contents or ""
+
+    if "%%VERSION%%" not in exception_contents:
+        return False
+
+    exception_path = get_version_exception_path(app_path)
+
+    with open(exception_path, "w", encoding="utf-8", errors="replace") as file: file.write(exception_contents)
+
+    append_tech_tool_audit_log(report_folder=report_folder, action="SaveVersionException", target_path=exception_path, current_user=current_user)
+    return True
+
+
+def generate_inventory_version_exception(version_folder, deploy_version):
+    if not version_folder or not os.path.isdir(version_folder):
+        raise Exception("No version folder was found.")
+
+    qa_report_path = next((entry.path for entry in os.scandir(version_folder) if entry.is_file() and entry.name.lower() == "qa.report"), "")
+
+    if not qa_report_path:
+        raise Exception("QA.report was not found in the version folder.")
+
+    with open(qa_report_path, "r", encoding="utf-8", errors="replace") as file: qa_report_contents = file.read()
+
+    inventory_version = get_inventory_version_from_qa_report(qa_report_path)
+
+    if not inventory_version:
+        raise Exception("The inventory version could not be found in QA.report.")
+
+    instructions = """You create PowerShell Version.exception scripts for software packages.
+
+Return only the PowerShell script. Do not use Markdown code fences or include an explanation outside the script.
+
+The script must:
+- Keep the placeholder %%VERSION%% in the script.
+- Start with $preVersion = "%%VERSION%%".
+- Transform $preVersion so it matches the supplied inventory version format.
+- Store the final result in $newVersion.
+- End with return $newVersion.
+- Include a short # Exception Summary comment explaining the transformation.
+- Use only the information supplied in the request and QA report.
+- Keep the script as simple and readable as possible.
+- Do not hardcode the current deploy version as the returned value.
+- You may use %%InvAppName%% or %%InvVersion%% only when they are genuinely needed."""
+
+    prompt = f"""Create a Version.exception PowerShell script.
+
+Deploy version:
+{deploy_version}
+
+Inventory version:
+{inventory_version}
+
+Determine the smallest reliable transformation needed to convert the deploy version format into the inventory version format."""
+
+    return ai.ask_ai(prompt=prompt, instructions=instructions, context=qa_report_contents)
+
 
 def get_installer_download_defaults(version_folder):
     """
@@ -315,7 +402,7 @@ def get_inventory_version_from_qa_report(qa_report_path):
             lines = file.read().splitlines()
 
         for index, line in enumerate(lines):
-            if line.strip() != expected_header:
+            if line.strip().lstrip(">") != expected_header:
                 continue
 
             data_line = next((candidate for candidate in lines[index + 1:] if candidate.strip()), "")

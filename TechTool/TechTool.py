@@ -946,6 +946,7 @@ class AppDetailsFrame(ttk.Frame):
         self.inventory_version_status_var = tk.StringVar()
         self.install_parameters_var = tk.StringVar()
         self.install_parameters_status_var = tk.StringVar()
+        self.version_exception_status_var = tk.StringVar()
         self.installer_url_var = tk.StringVar()
         self.installer_location_var = tk.StringVar()
         self.installer_status_var = tk.StringVar()
@@ -1775,6 +1776,7 @@ class AppDetailsFrame(ttk.Frame):
             placeholder_action,
             "Replace Installer",
             "Update Inventory Variables",
+            "Create Inventory Version Exception",
             "Update Install Parameters",
         ]
 
@@ -1797,8 +1799,8 @@ class AppDetailsFrame(ttk.Frame):
 
         if preferred_action in available_actions:
             selected_action = preferred_action
-        elif self.status.strip().upper() == "SUCCESS_PUB":
-            selected_action = "Update Inventory Variables"
+        #elif self.status.strip().upper() == "SUCCESS_PUB": #potential future publish action
+            #selected_action = "Update Inventory Variables"
         else:
             selected_action = placeholder_action
 
@@ -1868,6 +1870,10 @@ class AppDetailsFrame(ttk.Frame):
         
         if selected_action == "Update Inventory Variables":
             self.render_update_inventory_variables_action()
+            return
+
+        if selected_action == "Create Inventory Version Exception":
+            self.render_create_inventory_version_exception_action()
             return
 
         if selected_action == "Launch URL":
@@ -2013,6 +2019,115 @@ class AppDetailsFrame(ttk.Frame):
 
         except Exception as error:
             messagebox.showerror("Update Inventory Version Failed", str(error))
+
+    def render_create_inventory_version_exception_action(self):
+        self.action_content_frame.columnconfigure(0, weight=1)
+
+        exception_contents, already_exists = actions.load_version_exception(self.app_path)
+        self.version_exception_status_var.set("Version.exception already exists" if already_exists else "")
+
+        ttk.Label(self.action_content_frame, text="Placeholders:\n• %%VERSION%% (Required)\n• %%InvAppName%%\n• %%InvVersion%%", justify="left").grid(row=0, column=0, sticky="w", pady=(0, 8))
+    
+
+        editor_frame = ttk.Frame(self.action_content_frame)
+        editor_frame.grid(row=1, column=0, sticky="nsew")
+        editor_frame.columnconfigure(0, weight=1)
+        editor_frame.rowconfigure(0, weight=1)
+
+        self.version_exception_text = tk.Text(editor_frame, height=7, wrap="none", font=("Consolas", 10), undo=True)
+        self.version_exception_text.grid(row=0, column=0, sticky="nsew")
+
+        version_exception_scrollbar = ttk.Scrollbar(editor_frame, orient="vertical", command=self.version_exception_text.yview)
+        version_exception_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.version_exception_text.configure(yscrollcommand=version_exception_scrollbar.set)
+
+        self.version_exception_text.insert("1.0", exception_contents)
+
+        button_frame = ttk.Frame(self.action_content_frame)
+        button_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        button_frame.columnconfigure(1, weight=1)
+
+        self.version_exception_ai_button = ttk.Button(button_frame, text="AI Generate Exception", command=self.generate_inventory_version_exception)
+        self.version_exception_ai_button.grid(row=0, column=0, sticky="w")
+
+        self.version_exception_status_label = ttk.Label(button_frame, textvariable=self.version_exception_status_var, foreground="green")
+        self.version_exception_status_label.grid(row=0, column=1, sticky="w", padx=8)
+
+        self.version_exception_save_button = ttk.Button(button_frame, text="Save Version.exception", command=self.save_inventory_version_exception)
+        self.version_exception_save_button.grid(row=0, column=2, sticky="e")
+
+        self.version_exception_text.bind("<KeyRelease>", lambda event: self.clear_version_exception_status())
+        self.version_exception_text.focus_set()
+
+
+    def clear_version_exception_status(self):
+        if hasattr(self, "version_exception_status_label") and self.version_exception_status_label.winfo_exists():
+            self.version_exception_status_label.configure(foreground="green")
+
+        self.version_exception_status_var.set("")
+
+
+    def generate_inventory_version_exception(self):
+        self.version_exception_status_label.configure(foreground="green")
+        self.version_exception_status_var.set("Generating exception...")
+        self.version_exception_ai_button.configure(state="disabled")
+        self.version_exception_save_button.configure(state="disabled")
+
+        def worker():
+            try:
+                generated_exception = actions.generate_inventory_version_exception(version_folder=self.get_report_folder(), deploy_version=self.version)
+                self.after(0, lambda result=generated_exception: self.finish_generate_inventory_version_exception(result))
+            except Exception as error:
+                error_message = str(error)
+                self.after(0, lambda message=error_message: self.fail_generate_inventory_version_exception(message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
+    def finish_generate_inventory_version_exception(self, generated_exception):
+        if not hasattr(self, "version_exception_text") or not self.version_exception_text.winfo_exists():
+            return
+
+        self.version_exception_text.delete("1.0", "end")
+        self.version_exception_text.insert("1.0", generated_exception.strip() + "\n")
+        self.version_exception_status_label.configure(foreground="green")
+        self.version_exception_status_var.set("Generated — review before saving")
+        self.version_exception_ai_button.configure(state="normal")
+        self.version_exception_save_button.configure(state="normal")
+        self.version_exception_text.focus_set()
+
+
+    def fail_generate_inventory_version_exception(self, error_message):
+        if not hasattr(self, "version_exception_status_label") or not self.version_exception_status_label.winfo_exists():
+            return
+
+        self.version_exception_status_label.configure(foreground="red")
+        self.version_exception_status_var.set("Generation failed")
+        self.version_exception_ai_button.configure(state="normal")
+        self.version_exception_save_button.configure(state="normal")
+        messagebox.showerror("AI Generation Failed", error_message)
+
+
+    def save_inventory_version_exception(self):
+        exception_contents = self.version_exception_text.get("1.0", "end-1c")
+
+        if "%%VERSION%%" not in exception_contents:
+            self.version_exception_status_label.configure(foreground="red")
+            self.version_exception_status_var.set("%%VERSION%% is required")
+            return
+
+        try:
+            changed = actions.save_version_exception(app_path=self.app_path, exception_contents=exception_contents, report_folder=self.get_report_folder(), current_user=getattr(self.controller, "current_user", getpass.getuser()))
+
+            if changed:
+                self.refresh_page(preferred_report="audit.report")
+                self.version_exception_status_label.configure(foreground="green")
+                self.version_exception_status_var.set("Saved!")
+
+        except Exception as error:
+            self.version_exception_status_label.configure(foreground="red")
+            self.version_exception_status_var.set("Save failed")
+            messagebox.showerror("Save Version.exception Failed", str(error))
 
     def render_update_install_parameters_action(self):
         self.action_content_frame.columnconfigure(0, weight=1)
