@@ -103,7 +103,7 @@ def load_version_exception(app_path):
 
     default_contents = """# Exception Summary:
 
-$version = "%%VERSION%%"
+$version = "%VERSION%"
 
 ### Do things to adjust the Deploy version to match the Inventory version ###
 
@@ -120,7 +120,7 @@ def save_version_exception(app_path, exception_contents, report_folder=None, cur
 
     exception_contents = exception_contents or ""
 
-    if "%%VERSION%%" not in exception_contents:
+    if "%VERSION%" not in exception_contents:
         return False
 
     exception_path = get_version_exception_path(app_path)
@@ -152,8 +152,8 @@ def generate_inventory_version_exception(version_folder, deploy_version):
 Return only the PowerShell script. Do not use Markdown code fences or include an explanation outside the script.
 
 The script must:
-- Keep the placeholder %%VERSION%% in the script.
-- Start with $preVersion = "%%VERSION%%".
+- Keep the placeholder '%VERSION%' in the script.
+- Start with $preVersion = "%VERSION%".
 - Transform $preVersion so it matches the supplied inventory version format.
 - Store the final result in $newVersion.
 - End with return $newVersion.
@@ -161,7 +161,7 @@ The script must:
 - Use only the information supplied in the request and QA report.
 - Keep the script as simple and readable as possible.
 - Do not hardcode the current deploy version as the returned value.
-- You may use %%InvAppName%% or %%InvVersion%% only when they are genuinely needed."""
+- You may use '%InvAppName%' or '%InvVersion%' only when they are genuinely needed."""
 
     prompt = f"""Create a Version.exception PowerShell script.
 

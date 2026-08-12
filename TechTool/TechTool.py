@@ -2026,7 +2026,7 @@ class AppDetailsFrame(ttk.Frame):
         exception_contents, already_exists = actions.load_version_exception(self.app_path)
         self.version_exception_status_var.set("Version.exception already exists" if already_exists else "")
 
-        ttk.Label(self.action_content_frame, text="Placeholders:\n• %%VERSION%% (Required)\n• %%InvAppName%%\n• %%InvVersion%%", justify="left").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(self.action_content_frame, text="Placeholders:\n• %VERSION% (Required) • %InvAppName% • %InvVersion%", justify="left").grid(row=0, column=0, sticky="w", pady=(0, 8))
     
 
         editor_frame = ttk.Frame(self.action_content_frame)
@@ -2111,9 +2111,9 @@ class AppDetailsFrame(ttk.Frame):
     def save_inventory_version_exception(self):
         exception_contents = self.version_exception_text.get("1.0", "end-1c")
 
-        if "%%VERSION%%" not in exception_contents:
+        if "%VERSION%" not in exception_contents:
             self.version_exception_status_label.configure(foreground="red")
-            self.version_exception_status_var.set("%%VERSION%% is required")
+            self.version_exception_status_var.set("'%VERSION%' is required")
             return
 
         try:
