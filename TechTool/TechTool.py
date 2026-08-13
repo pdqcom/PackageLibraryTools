@@ -290,6 +290,7 @@ class RepoStatusViewer(tk.Tk):
 
         self.viewer_frame.grid(row=0, column=0, sticky="nsew")
         self.app_details_frame.grid(row=0, column=0, sticky="nsew")
+        self.load_saved_environment_settings()
 
         self.container.rowconfigure(0, weight=1)
         self.container.columnconfigure(0, weight=1)
@@ -297,17 +298,22 @@ class RepoStatusViewer(tk.Tk):
         self.show_viewer()
         self.after(100, self.viewer_frame.scan_repo)
         self.after(200, self.refresh_troubleshooting_cache_if_needed)
+
+    def load_saved_environment_settings(self):
+        for _, variable_name, _ in ENVIRONMENT_SETTINGS:
+            value = self.viewer_frame.get_user_environment_variable(variable_name)
+
+            if value:
+                os.environ[variable_name] = value
+            else:
+                os.environ.pop(variable_name, None)
         
     def refresh_troubleshooting_cache_if_needed(self):
         if not actions.troubleshooting_cache_is_stale():
             return
 
-        notion_api_key = self.viewer_frame.get_user_environment_variable("Notion_API_Key")
-
-        if not notion_api_key:
+        if not os.getenv("Notion_API_Key"):
             return
-
-        os.environ["Notion_API_Key"] = notion_api_key
 
         def worker():
             if actions.refresh_troubleshooting_cache():
@@ -884,6 +890,7 @@ class ViewerFrame(ttk.Frame):
             result = ctypes.c_ulong()
             ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, ctypes.byref(result))
             status_var.set("Saved!")
+            self.controller.refresh_troubleshooting_cache_if_needed()
 
         except Exception as error:
             messagebox.showerror("Settings Error", f"Unable to save environment settings:\n{error}")
