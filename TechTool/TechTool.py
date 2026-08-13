@@ -7,6 +7,7 @@ import shutil
 import winreg
 import actions
 import getpass
+import sys
 from tkinter import ttk, filedialog, messagebox, font
 from PIL import Image, ImageTk
 from datetime import datetime
@@ -277,6 +278,9 @@ class RepoStatusViewer(tk.Tk):
         super().__init__()
 
         self.title("Repo Status Viewer")
+        icon_path = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "TechToolIcon.png")
+        self.app_icon = tk.PhotoImage(file=icon_path)
+        self.iconphoto(True, self.app_icon)      
         self.minsize(900, 500)
         center_window_on_mouse_monitor(self, 1100, 600)
 
