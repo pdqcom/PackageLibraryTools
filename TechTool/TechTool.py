@@ -72,7 +72,8 @@ STATUS_CHANGE_OPTIONS = [
 ]
 
 ENVIRONMENT_SETTINGS = [
-    ("OpenAI API Key:", "OpenAI_API_Key"),
+    ("OpenAI API Key:", "OpenAI_API_Key", "Required for AI features"),
+    ("Notion API Key:", "Notion_API_Key", "Optional - allows refreshing AI troubleshooting data"),
 ]
 
 class POINT(ctypes.Structure):
@@ -280,6 +281,7 @@ class RepoStatusViewer(tk.Tk):
         center_window_on_mouse_monitor(self, 1100, 600)
 
         self.current_user = getpass.getuser()
+        self.troubleshooting_errors = actions.load_troubleshooting_cache()
         self.container = ttk.Frame(self)
         self.container.pack(fill="both", expand=True)
 
@@ -294,7 +296,25 @@ class RepoStatusViewer(tk.Tk):
 
         self.show_viewer()
         self.after(100, self.viewer_frame.scan_repo)
+        self.after(200, self.refresh_troubleshooting_cache_if_needed)
         
+    def refresh_troubleshooting_cache_if_needed(self):
+        if not actions.troubleshooting_cache_is_stale():
+            return
+
+        notion_api_key = self.viewer_frame.get_user_environment_variable("Notion_API_Key")
+
+        if not notion_api_key:
+            return
+
+        os.environ["Notion_API_Key"] = notion_api_key
+
+        def worker():
+            if actions.refresh_troubleshooting_cache():
+                refreshed_errors = actions.load_troubleshooting_cache()
+                self.after(0, lambda: setattr(self, "troubleshooting_errors", refreshed_errors))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def show_viewer(self, refresh_app_path=None):
         self.title("Repo Status Viewer")
@@ -797,11 +817,32 @@ class ViewerFrame(ttk.Frame):
 
         setting_vars = {}
 
-        for row, (label_text, variable_name) in enumerate(ENVIRONMENT_SETTINGS):
-            value_var = tk.StringVar(value=self.get_user_environment_variable(variable_name))
+        for row, (label_text, variable_name, placeholder_text) in enumerate(ENVIRONMENT_SETTINGS):
+            saved_value = self.get_user_environment_variable(variable_name)
+            value_var = tk.StringVar(value=saved_value)
             setting_vars[variable_name] = value_var
+
             ttk.Label(container, text=label_text).grid(row=row, column=0, sticky="e", padx=(0, 8), pady=4)
-            ttk.Entry(container, textvariable=value_var, width=50).grid(row=row, column=1, sticky="ew", pady=4)
+
+            entry = ttk.Entry(container, textvariable=value_var, width=50)
+            entry.grid(row=row, column=1, sticky="ew", pady=4)
+
+            if not saved_value:
+                entry.insert(0, placeholder_text)
+                entry.configure(foreground="gray")
+
+            def focus_in(event, var=value_var, placeholder=placeholder_text):
+                if var.get() == placeholder:
+                    var.set("")
+                    event.widget.configure(foreground="black")
+
+            def focus_out(event, var=value_var, placeholder=placeholder_text):
+                if not var.get().strip():
+                    var.set(placeholder)
+                    event.widget.configure(foreground="gray")
+
+            entry.bind("<FocusIn>", focus_in)
+            entry.bind("<FocusOut>", focus_out)
 
         button_frame = ttk.Frame(container)
         button_frame.grid(row=len(ENVIRONMENT_SETTINGS), column=0, columnspan=2, sticky="e", pady=(10, 0))
@@ -828,15 +869,22 @@ class ViewerFrame(ttk.Frame):
 
     def save_environment_settings(self, setting_vars, status_var):
         try:
+            placeholders = {variable_name: placeholder_text for _, variable_name, placeholder_text in ENVIRONMENT_SETTINGS}
+
             with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
                 for variable_name, value_var in setting_vars.items():
                     value = value_var.get().strip()
+
+                    if value == placeholders.get(variable_name, ""):
+                        value = ""
+
                     winreg.SetValueEx(key, variable_name, 0, winreg.REG_SZ, value)
                     os.environ[variable_name] = value
 
             result = ctypes.c_ulong()
             ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, ctypes.byref(result))
             status_var.set("Saved!")
+
         except Exception as error:
             messagebox.showerror("Settings Error", f"Unable to save environment settings:\n{error}")
 
@@ -952,6 +1000,8 @@ class AppDetailsFrame(ttk.Frame):
         self.installer_status_var = tk.StringVar()
         self.installer_source_var = tk.StringVar(value="URL")
         self.local_installer_var = tk.StringVar()
+        self.ai_analyze_extra_context_var = tk.StringVar()
+        self.ai_analyze_status_var = tk.StringVar()
         self.ready_pub_app_name_var = tk.StringVar()
         self.ready_pub_inventory_variable_var = tk.StringVar()
         self.ready_pub_inventory_version_var = tk.StringVar()
@@ -1778,6 +1828,7 @@ class AppDetailsFrame(ttk.Frame):
             "Update Inventory Variables",
             "Create Inventory Version Exception",
             "Update Install Parameters",
+            "Ai Analyze",
         ]
 
         show_launch_url, reason_url = actions.should_show_launch_url(self.reason)
@@ -1882,6 +1933,10 @@ class AppDetailsFrame(ttk.Frame):
         
         if selected_action == "Update Install Parameters":
             self.render_update_install_parameters_action()
+            return
+        
+        if selected_action == "Ai Analyze":
+            self.render_ai_analyze_action()
             return
 
     def render_launch_url_action(self):
@@ -2034,7 +2089,7 @@ class AppDetailsFrame(ttk.Frame):
         editor_frame.columnconfigure(0, weight=1)
         editor_frame.rowconfigure(0, weight=1)
 
-        self.version_exception_text = tk.Text(editor_frame, height=7, wrap="none", font=("Consolas", 10), undo=True)
+        self.version_exception_text = tk.Text(editor_frame, height=7, width=1, wrap="none", font=("Consolas", 10), undo=True)
         self.version_exception_text.grid(row=0, column=0, sticky="nsew")
 
         version_exception_scrollbar = ttk.Scrollbar(editor_frame, orient="vertical", command=self.version_exception_text.yview)
@@ -2187,6 +2242,86 @@ class AppDetailsFrame(ttk.Frame):
         except Exception as error:
             messagebox.showerror("Update Install Parameters Failed", str(error))
 
+    def render_ai_analyze_action(self):
+        self.action_content_frame.columnconfigure(0, weight=1)
+        self.ai_analyze_status_var.set("")
+
+        ttk.Label(self.action_content_frame, text="Extra Context:").grid(row=0, column=0, sticky="w")
+
+        self.ai_analyze_extra_context_text = tk.Text(self.action_content_frame, height=8, width=1, wrap="word")
+        self.ai_analyze_extra_context_text.grid(row=1, column=0, sticky="nsew", pady=(3, 8))
+
+        placeholder_text = "Optional - add any additional context for the AI analysis"
+        self.ai_analyze_extra_context_text.insert("1.0", placeholder_text)
+        self.ai_analyze_extra_context_text.configure(foreground="gray")
+
+        def focus_in(event):
+            if self.ai_analyze_extra_context_text.get("1.0", "end-1c") == placeholder_text:
+                self.ai_analyze_extra_context_text.delete("1.0", "end")
+                self.ai_analyze_extra_context_text.configure(foreground="black")
+
+        def focus_out(event):
+            if not self.ai_analyze_extra_context_text.get("1.0", "end-1c").strip():
+                self.ai_analyze_extra_context_text.insert("1.0", placeholder_text)
+                self.ai_analyze_extra_context_text.configure(foreground="gray")
+
+        self.ai_analyze_extra_context_text.bind("<FocusIn>", focus_in)
+        self.ai_analyze_extra_context_text.bind("<FocusOut>", focus_out)
+
+        button_frame = ttk.Frame(self.action_content_frame)
+        button_frame.grid(row=2, column=0, sticky="ew")
+        button_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(button_frame, textvariable=self.ai_analyze_status_var).grid(row=0, column=0, sticky="w")
+
+        self.ai_analyze_button = ttk.Button(button_frame, text="Ai Analyze", command=self.run_ai_analyze)
+        self.ai_analyze_button.grid(row=0, column=1, sticky="e")
+
+    def run_ai_analyze(self):
+        placeholder_text = "Optional - add any additional context for the AI analysis"
+        extra_context = self.ai_analyze_extra_context_text.get("1.0", "end-1c").strip()
+
+        if extra_context == placeholder_text:
+            extra_context = ""
+
+        self.ai_analyze_status_var.set("Analyzing...")
+        self.ai_analyze_button.configure(state="disabled")
+
+        def worker():
+            try:
+                output_path = actions.generate_ai_analysis(
+                    version_folder=self.get_report_folder(),
+                    app_name=self.app_name,
+                    version=self.version,
+                    status=self.status,
+                    reason=self.reason,
+                    failed_step=self.failed_step,
+                    extra_context=extra_context,
+                    troubleshooting_errors=getattr(self.controller, "troubleshooting_errors", [])
+                )
+
+                self.after(0, lambda path=output_path: self.finish_ai_analyze(path))
+
+            except Exception as error:
+                error_message = str(error)
+                self.after(0, lambda message=error_message: self.fail_ai_analyze(message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_ai_analyze(self, output_path):
+        if not hasattr(self, "ai_analyze_button") or not self.ai_analyze_button.winfo_exists():
+            return
+
+        self.ai_analyze_status_var.set("Analysis complete")
+        self.refresh_page(preferred_report="AiAnalyzed.report")
+
+    def fail_ai_analyze(self, error_message):
+        if not hasattr(self, "ai_analyze_button") or not self.ai_analyze_button.winfo_exists():
+            return
+
+        self.ai_analyze_status_var.set("Analysis failed")
+        self.ai_analyze_button.configure(state="normal")
+        messagebox.showerror("AI Analyze Failed", error_message)
 
     def render_replace_installer_action(self):
         self.action_content_frame.columnconfigure(0, weight=1)
