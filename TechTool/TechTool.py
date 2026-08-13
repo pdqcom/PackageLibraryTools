@@ -1303,12 +1303,10 @@ class AppDetailsFrame(ttk.Frame):
         self.load_details()
         self.load_actions(preferred_action=preferred_action)
 
-        
-
     def shorten_path(self, path, max_length=45):
         if not path: return ""
         if len(path) <= max_length: return path
-        return path[:max_length - 3] + "..."
+        return "..." + path[-(max_length - 3):]
 
     def focus_details(self):
         self.after_idle(self.text.focus_set)
