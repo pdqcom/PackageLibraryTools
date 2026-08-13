@@ -7,6 +7,7 @@ import shutil
 import winreg
 import actions
 import getpass
+import sys
 from tkinter import ttk, filedialog, messagebox, font
 from PIL import Image, ImageTk
 from datetime import datetime
@@ -276,7 +277,10 @@ class RepoStatusViewer(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Repo Status Viewer")
+        self.title("Package Library Tech Tool")
+        icon_path = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "TechToolIcon.png")
+        self.app_icon = tk.PhotoImage(file=icon_path)
+        self.iconphoto(True, self.app_icon)      
         self.minsize(900, 500)
         center_window_on_mouse_monitor(self, 1100, 600)
 
@@ -323,7 +327,7 @@ class RepoStatusViewer(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def show_viewer(self, refresh_app_path=None):
-        self.title("Repo Status Viewer")
+        self.title("Package Library Tech Tool")
         self.viewer_frame.tkraise()
         self.viewer_frame.focus_viewer()
 
@@ -331,7 +335,7 @@ class RepoStatusViewer(tk.Tk):
             self.viewer_frame.refresh_single_app(refresh_app_path)
 
     def show_app_details(self, app_data):
-        self.title(f"Repo Status Viewer - {app_data.get('App', '')}")
+        self.title(f"Package Library Tech Tool - {app_data.get('App', '')}")
         self.app_details_frame.load_app(app_data, preferred_report="qa.report", preserve_report=False)
         self.app_details_frame.tkraise()
         self.app_details_frame.focus_details()
@@ -357,8 +361,19 @@ class ViewerFrame(ttk.Frame):
         self.build_ui()
 
     def build_ui(self):
-        top_frame = ttk.Frame(self, padding=8)
-        top_frame.pack(fill="x")
+        header_frame = ttk.Frame(self, padding=8)
+        header_frame.pack(fill="x")
+        header_frame.columnconfigure(1, weight=1)
+
+        icon_path = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "TechToolIcon.png")
+        icon_image = Image.open(icon_path)
+        icon_image.thumbnail((54, 54))
+        self.viewer_logo_image = ImageTk.PhotoImage(icon_image)
+
+        ttk.Label(header_frame, image=self.viewer_logo_image).grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 10))
+
+        top_frame = ttk.Frame(header_frame)
+        top_frame.grid(row=0, column=1, sticky="ew", pady=(0, 4))
 
         ttk.Label(top_frame, text="Repo:").pack(side="left")
 
@@ -368,8 +383,8 @@ class ViewerFrame(ttk.Frame):
         ttk.Button(top_frame, text="Browse", command=self.browse_repo).pack(side="left", padx=2)
         ttk.Button(top_frame, text="Refresh", command=self.scan_repo).pack(side="left", padx=2)
 
-        filter_frame = ttk.Frame(self, padding=(8, 0, 8, 8))
-        filter_frame.pack(fill="x")
+        filter_frame = ttk.Frame(header_frame)
+        filter_frame.grid(row=1, column=1, sticky="ew")
 
         ttk.Label(filter_frame, text="Search:").pack(side="left")
 
@@ -379,19 +394,11 @@ class ViewerFrame(ttk.Frame):
 
         ttk.Label(filter_frame, text="Status:").pack(side="left", padx=(15, 0))
 
-        self.status_dropdown = CheckBoxDropdown(
-            filter_frame,
-            on_change=self.apply_filters
-        )
+        self.status_dropdown = CheckBoxDropdown(filter_frame, on_change=self.apply_filters)
         self.status_dropdown.pack(side="left", padx=5)
         self.status_dropdown.button.configure(state="disabled")
 
-        self.exclude_new_checkbox = ttk.Checkbutton(
-            filter_frame,
-            textvariable=self.exclude_new_text_var,
-            variable=self.exclude_new_var,
-            command=self.apply_filters
-        )
+        self.exclude_new_checkbox = ttk.Checkbutton(filter_frame, textvariable=self.exclude_new_text_var, variable=self.exclude_new_var, command=self.apply_filters)
         self.exclude_new_checkbox.pack(side="left", padx=(10, 0))
 
         ttk.Button(filter_frame, text="Settings", command=self.open_settings).pack(side="right")
@@ -1303,12 +1310,10 @@ class AppDetailsFrame(ttk.Frame):
         self.load_details()
         self.load_actions(preferred_action=preferred_action)
 
-        
-
     def shorten_path(self, path, max_length=45):
         if not path: return ""
         if len(path) <= max_length: return path
-        return path[:max_length - 3] + "..."
+        return "..." + path[-(max_length - 3):]
 
     def focus_details(self):
         self.after_idle(self.text.focus_set)
