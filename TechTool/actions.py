@@ -9,6 +9,11 @@ import urllib.request
 import webbrowser
 import xml.etree.ElementTree as ET
 import ai
+import json
+import time
+import textwrap
+import fnmatch
+from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from tkinter import filedialog, messagebox
 from urllib.parse import urlparse
@@ -19,7 +24,121 @@ from urllib.parse import urlparse
 # ==========================================
 
 VIRUSTOTAL_GUI_PREFIX = "https://www.virustotal.com/gui/"
+NOTION_API_KEY_ENV = "Notion_API_Key"
+NOTION_DATABASE_ID = "314964a5c89680c89d2fd32ae75a21ec"
+NOTION_API_URL = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+NOTION_CACHE_PATH = r"C:\ProgramData\TechTool\troubleshooting_cache.json"
+NOTION_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24
 
+# ==========================================
+# Troubleshooting Database Helpers
+# ==========================================
+
+def load_troubleshooting_cache():
+    if not os.path.isfile(NOTION_CACHE_PATH):
+        return []
+
+    try:
+        with open(NOTION_CACHE_PATH, "r", encoding="utf-8", errors="replace") as file:
+            data = json.load(file)
+
+        return data.get("errors", [])
+
+    except Exception:
+        return []
+
+
+def troubleshooting_cache_is_stale():
+    if not os.path.isfile(NOTION_CACHE_PATH):
+        return True
+
+    try:
+        age_seconds = time.time() - os.path.getmtime(NOTION_CACHE_PATH)
+        return age_seconds >= NOTION_CACHE_MAX_AGE_SECONDS
+
+    except Exception:
+        return True
+
+
+def refresh_troubleshooting_cache():
+    api_key = os.getenv(NOTION_API_KEY_ENV)
+    if not api_key:
+        return False
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+
+    request = urllib.request.Request(
+        NOTION_API_URL,
+        data=b"{}",
+        headers=headers,
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+
+        errors = []
+
+        for item in result.get("results", []):
+            properties = item.get("properties", {})
+
+            error_title = properties.get("Error", {}).get("title", [])
+            troubleshooting_text = properties.get("Troubleshooting Step", {}).get("rich_text", [])
+
+            error_value = "".join(part.get("plain_text", "") for part in error_title).strip()
+            troubleshooting_value = "".join(part.get("plain_text", "") for part in troubleshooting_text).strip()
+
+            if not error_value and not troubleshooting_value:
+                continue
+
+            errors.append({
+                "error": error_value,
+                "troubleshooting_step": troubleshooting_value
+            })
+
+        os.makedirs(os.path.dirname(NOTION_CACHE_PATH), exist_ok=True)
+
+        cache_data = {
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "errors": errors
+        }
+
+        with open(NOTION_CACHE_PATH, "w", encoding="utf-8", errors="replace") as file:
+            json.dump(cache_data, file, indent=2)
+
+        return True
+
+    except Exception:
+        return False
+
+def troubleshooting_error_matches(error_text, report_text):
+    error_text = (error_text or "").strip().lower()
+    report_text = (report_text or "").lower()
+
+    if not error_text:
+        return False
+
+    if error_text in report_text:
+        return True
+
+    if "*" in error_text or "?" in error_text:
+        for line in report_text.splitlines():
+            if fnmatch.fnmatch(line.strip(), f"*{error_text}*"):
+                return True
+
+    normalized_error = re.sub(r"\s+", " ", error_text)
+    normalized_lines = [re.sub(r"\s+", " ", line.strip()) for line in report_text.splitlines() if line.strip()]
+
+    for line in normalized_lines:
+        if SequenceMatcher(None, normalized_error, line).ratio() >= 0.80:
+            return True
+
+    return False
 
 # ==========================================
 # Action Helpers
@@ -175,6 +294,179 @@ Determine the smallest reliable transformation needed to convert the deploy vers
 
     return ai.ask_ai(prompt=prompt, instructions=instructions, context=qa_report_contents)
 
+def wrap_report_text(text, width=80):
+    lines = []
+
+    for line in (text or "").splitlines():
+        stripped_line = line.strip()
+
+        if not stripped_line:
+            lines.append("")
+            continue
+
+        lines.append(textwrap.fill(stripped_line, width=width, subsequent_indent="   " if re.match(r"^\d+[\.\)]\s+", stripped_line) else ""))
+
+    return "\n".join(lines)
+
+def generate_ai_analysis(version_folder, app_name, version, status, reason="", failed_step="", extra_context="", troubleshooting_errors=None):
+    if not version_folder or not os.path.isdir(version_folder):
+        raise Exception("No version folder was found.")
+
+    report_files = [
+        entry
+        for entry in os.scandir(version_folder)
+        if entry.is_file()
+        and entry.name.lower().endswith(".report")
+        and entry.name.lower() != "aianalyzed.report"
+    ]
+
+    if not report_files:
+        raise Exception("No report files were found to analyze.")
+
+    report_files.sort(key=lambda entry: entry.name.lower())
+
+    report_sections = []
+
+    for entry in report_files:
+        try:
+            with open(entry.path, "r", encoding="utf-8", errors="replace") as file:
+                contents = file.read().strip()
+        except Exception as error:
+            contents = f"[Unable to read report: {error}]"
+
+        report_sections.append(f"--- {entry.name} ---\n{contents}")
+
+    report_text_for_matching = "\n".join(report_sections)
+
+    matched_troubleshooting_sections = []
+    other_troubleshooting_sections = []
+
+    for item in troubleshooting_errors or []:
+        error_text = (item.get("error") or "").strip()
+        step_text = (item.get("troubleshooting_step") or "").strip()
+
+        if not error_text and not step_text:
+            continue
+
+        entry = f"Documented Error: {error_text}\nDocumented Procedure:\n{step_text}"
+
+        if troubleshooting_error_matches(error_text, report_text_for_matching):
+            matched_troubleshooting_sections.append(entry)
+        else:
+            other_troubleshooting_sections.append(entry)
+
+    instructions = """You are a software package troubleshooting expert.
+
+Review the supplied package information, report files, matched troubleshooting procedures, and additional troubleshooting reference data.
+
+Determine:
+- Reason: what happened.
+- Cause: the most likely root cause. Explain meaningful patterns such as operating system, device type, server/client differences, repeated failures, or other correlations when evidence exists.
+- Fix: the most probable resolution. When multiple actions are required, return a numbered list with each step on its own line.
+- Evidence: brief supporting information showing which documented troubleshooting knowledge was used.
+
+The MATCHED DOCUMENTED TROUBLESHOOTING PROCEDURES section contains troubleshooting procedures whose documented error text matched the package reports using exact, wildcard, or fuzzy matching.
+
+When one or more matched procedures are supplied:
+- Treat the matched procedure as the primary troubleshooting playbook.
+- Use the package reports to determine which condition or branch in the documented procedure applies.
+- The Fix must begin with the applicable documented troubleshooting step.
+- Follow the documented procedure in its intended order.
+- Do not skip ahead to a later troubleshooting branch merely because it seems technically plausible.
+- If the reports do not contain enough information to determine which documented branch applies, state what should be checked next instead of guessing.
+- Additional recommendations may be included only after the applicable documented procedure.
+- If a matched documented procedure exists, Evidence must name the matched documented error or fix and state that the documented troubleshooting procedure was used.
+- Only reject a matched documented procedure when the package reports contain clear contradictory evidence. If rejected, briefly explain why in Evidence.
+
+The ADDITIONAL TROUBLESHOOTING REFERENCE section contains other known troubleshooting information that did not directly match the reports. Use it only when relevant.
+
+Formatting requirements:
+- When Fix contains multiple steps, format them as a numbered list with each numbered step on its own line.
+- Put a blank line before a numbered list when introductory text appears before it.
+- Keep each numbered action as a separate step rather than combining multiple numbered actions into one paragraph.
+
+General requirements:
+- Be concise and evidence-based.
+- Do not invent facts that are not supported by the supplied information.
+- Clearly distinguish confirmed evidence from likely conclusions.
+- Do not hardcode a current version number as a permanent fix unless the supplied documented procedure explicitly requires it.
+- Prefer a documented troubleshooting procedure over a speculative fix when a match exists.
+- Keep Evidence brief and generic. Do not repeat detailed report evidence unless it is necessary to understand the conclusion.
+- Return only valid JSON.
+- The JSON object must contain exactly these string properties: Reason, Cause, Fix, Evidence.
+"""
+
+    prompt = f"""Analyze this package failure.
+
+PACKAGE
+-------
+App: {app_name}
+Version: {version}
+Status: {status}
+Reason: {reason}
+Failed Step: {failed_step}
+
+EXTRA CONTEXT
+-------------
+{extra_context or "(none provided)"}
+
+MATCHED DOCUMENTED TROUBLESHOOTING PROCEDURES
+---------------------------------------------
+{chr(10).join(matched_troubleshooting_sections) if matched_troubleshooting_sections else "(no matching documented procedure found)"}
+
+ADDITIONAL TROUBLESHOOTING REFERENCE
+------------------------------------
+{chr(10).join(other_troubleshooting_sections) if other_troubleshooting_sections else "(none)"}
+
+PACKAGE REPORTS
+===============
+{chr(10).join(report_sections)}
+"""
+
+    ai_response = ai.ask_ai(prompt=prompt, instructions=instructions)
+    cleaned_response = ai_response.strip()
+
+    if cleaned_response.startswith("```"):
+        cleaned_response = re.sub(r"^```(?:json)?\s*", "", cleaned_response, flags=re.IGNORECASE)
+        cleaned_response = re.sub(r"\s*```$", "", cleaned_response)
+
+    try:
+        result = json.loads(cleaned_response)
+    except json.JSONDecodeError as error:
+        raise Exception(f"AI returned an invalid analysis response: {error}")
+
+    reason_result = str(result.get("Reason", "")).strip()
+    cause_result = str(result.get("Cause", "")).strip()
+    fix_result = str(result.get("Fix", "")).strip()
+    evidence_result = str(result.get("Evidence", "")).strip()
+
+    reason_result = wrap_report_text(reason_result)
+    cause_result = wrap_report_text(cause_result)
+    fix_result = wrap_report_text(fix_result)
+    evidence_result = wrap_report_text(evidence_result)
+
+    report_text = f"""AI Analysis
+===========
+
+Reason:
+{reason_result}
+
+Cause:
+{cause_result}
+
+Fix:
+{fix_result}
+
+Evidence:
+{evidence_result}
+"""
+
+    output_path = os.path.join(version_folder, "AiAnalyzed.report")
+
+    with open(output_path, "w", encoding="utf-8", errors="replace") as file:
+        file.write(report_text)
+
+    return output_path
 
 def get_installer_download_defaults(version_folder):
     """
